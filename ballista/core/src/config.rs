@@ -43,6 +43,7 @@ pub const BALLISTA_SHUFFLE_READER_FORCE_REMOTE_READ: &str =
 /// Configuration key to prefer Flight protocol for remote shuffle reads.
 pub const BALLISTA_SHUFFLE_READER_REMOTE_PREFER_FLIGHT: &str =
     "ballista.shuffle.remote_read_prefer_flight";
+pub const BALLISTA_RETURN_PHYSICAL_PLAN: &str = "ballista.return_physical_plan";
 
 /// Configuration key for gRPC client connection timeout in seconds.
 pub const BALLISTA_GRPC_CLIENT_CONNECT_TIMEOUT_SECONDS: &str =
@@ -83,6 +84,10 @@ static CONFIG_ENTRIES: LazyLock<HashMap<String, ConfigEntry>> = LazyLock::new(||
                          Some((false).to_string())),
         ConfigEntry::new(BALLISTA_SHUFFLE_READER_REMOTE_PREFER_FLIGHT.to_string(),
                          "Forces the shuffle reader to use flight reader instead of block reader for remote read. Block reader usually has better performance and resource utilization".to_string(),
+                         DataType::Boolean,
+                         Some((false).to_string())),
+        ConfigEntry::new(BALLISTA_RETURN_PHYSICAL_PLAN.to_string(),
+                         "Include the optimized physical plan string in ExecuteQuery responses.".to_string(),
                          DataType::Boolean,
                          Some((false).to_string())),
         ConfigEntry::new(BALLISTA_GRPC_CLIENT_CONNECT_TIMEOUT_SECONDS.to_string(),
@@ -262,6 +267,10 @@ impl BallistaConfig {
     /// Block protocol is usually more performant than flight protocol
     pub fn shuffle_reader_remote_prefer_flight(&self) -> bool {
         self.get_bool_setting(BALLISTA_SHUFFLE_READER_REMOTE_PREFER_FLIGHT)
+    }
+
+    pub fn return_physical_plan(&self) -> bool {
+        self.get_bool_setting(BALLISTA_RETURN_PHYSICAL_PLAN)
     }
 
     fn get_usize_setting(&self, key: &str) -> usize {
