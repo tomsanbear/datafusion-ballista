@@ -242,6 +242,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         plan: Arc<dyn ExecutionPlan>,
         queued_at: u64,
         session_config: Arc<SessionConfig>,
+        physical_plan: Option<String>,
     ) -> Result<()> {
         let mut planner = DefaultDistributedPlanner::new();
         let mut graph = ExecutionGraph::new(
@@ -253,6 +254,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             queued_at,
             session_config,
             &mut planner,
+            physical_plan,
         )?;
         info!("Submitting execution graph: {graph:?}");
 

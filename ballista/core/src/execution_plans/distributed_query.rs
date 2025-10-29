@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::client::BallistaClient;
-use crate::config::BallistaConfig;
+use crate::config::{BallistaConfig, BALLISTA_RETURN_PHYSICAL_PLAN};
+use crate::extension::{PlanCaptureExtension, SessionConfigExt};
 use crate::serde::protobuf::SuccessfulJob;
 use crate::serde::protobuf::{
     execute_query_params::Query, execute_query_result, job_status,
@@ -47,7 +48,7 @@ use log::{debug, error, info};
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// This operator sends a logical plan to a Ballista scheduler for execution and
@@ -205,8 +206,8 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             DataFusionError::Execution(format!("failed to encode logical plan: {e:?}"))
         })?;
 
-        let settings = context
-            .session_config()
+        let session_config = context.session_config();
+        let mut settings: Vec<KeyValuePair> = session_config
             .options()
             .entries()
             .iter()
@@ -217,6 +218,19 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 },
             )
             .collect();
+        let return_physical_plan =
+            session_config.ballista_config().return_physical_plan();
+        if return_physical_plan {
+            settings.push(KeyValuePair {
+                key: BALLISTA_RETURN_PHYSICAL_PLAN.to_string(),
+                value: Some(true.to_string()),
+            });
+        }
+        let plan_slot = session_config
+            .options()
+            .extensions
+            .get::<PlanCaptureExtension>()
+            .map(|ext| ext.plan_arc());
         let operation_id = uuid::Uuid::now_v7().to_string();
         debug!(
             "Distributed query with session_id: {}, execution operation_id: {}",
@@ -238,6 +252,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 self.session_id.clone(),
                 query,
                 self.config.default_grpc_client_max_message_size(),
+                plan_slot,
             )
             .map_err(|e| ArrowError::ExternalError(Box::new(e))),
         )
@@ -274,6 +289,7 @@ async fn execute_query(
     session_id: String,
     query: ExecuteQueryParams,
     max_message_size: usize,
+    plan_slot: Option<Arc<Mutex<Option<String>>>>,
 ) -> Result<impl Stream<Item = Result<RecordBatch>> + Send> {
     info!("Connecting to Ballista scheduler at {scheduler_url}");
     // TODO reuse the scheduler to avoid connecting to the Ballista scheduler again and again
@@ -350,12 +366,18 @@ async fn execute_query(
                 started_at,
                 ended_at,
                 partition_location,
+                physical_plan,
                 ..
             })) => {
                 let duration = ended_at.saturating_sub(started_at);
                 let duration = Duration::from_millis(duration);
 
                 info!("Job {job_id} finished executing in {duration:?} ");
+                if let (Some(slot), Some(plan)) = (plan_slot.as_ref(), physical_plan) {
+                    if let Ok(mut guard) = slot.lock() {
+                        *guard = Some(plan);
+                    }
+                }
                 let streams = partition_location.into_iter().map(move |partition| {
                     let f = fetch_partition(partition, max_message_size, true)
                         .map_err(|e| ArrowError::ExternalError(Box::new(e)));

@@ -126,6 +126,8 @@ pub struct ExecutionGraph {
     failed_stage_attempts: HashMap<usize, HashSet<usize>>,
     /// Session config for this job
     session_config: Arc<SessionConfig>,
+    /// Optional captured physical plan for this job
+    physical_plan: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +150,7 @@ impl ExecutionGraph {
         queued_at: u64,
         session_config: Arc<SessionConfig>,
         planner: &mut dyn DistributedPlanner,
+        physical_plan: Option<String>,
     ) -> Result<Self> {
         let output_partitions = plan.properties().output_partitioning().partition_count();
         let shuffle_stages =
@@ -182,6 +185,7 @@ impl ExecutionGraph {
             task_id_gen: 0,
             failed_stage_attempts: HashMap::new(),
             session_config,
+            physical_plan,
         })
     }
 
@@ -1303,6 +1307,7 @@ impl ExecutionGraph {
                 queued_at: self.queued_at,
                 started_at: self.start_time,
                 ended_at: self.end_time,
+                physical_plan: self.physical_plan.clone(),
             })),
         };
 

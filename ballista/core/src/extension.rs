@@ -23,13 +23,14 @@ use crate::config::{
 use crate::planner::BallistaQueryPlanner;
 use crate::serde::protobuf::KeyValuePair;
 use crate::serde::{BallistaLogicalExtensionCodec, BallistaPhysicalExtensionCodec};
+use datafusion::config::{ConfigEntry, ConfigExtension};
 use datafusion::execution::context::{QueryPlanner, SessionConfig, SessionState};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalPlanNode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Provides methods which adapt [SessionState]
 /// for Ballista usage
@@ -211,6 +212,7 @@ impl SessionConfigExt for SessionConfig {
     fn new_with_ballista() -> SessionConfig {
         SessionConfig::new()
             .with_option_extension(BallistaConfig::default())
+            .with_option_extension(PlanCaptureExtension::new())
             .with_information_schema(true)
             .with_target_partitions(16)
             .ballista_restricted_configuration()
@@ -224,8 +226,18 @@ impl SessionConfigExt for SessionConfig {
         // session config has ballista config extension and
         // default datafusion configuration is altered
         // to fit ballista execution
-        self.with_option_extension(ballista_config)
-            .ballista_restricted_configuration()
+        let config = self.with_option_extension(ballista_config);
+        let config = if config
+            .options()
+            .extensions
+            .get::<PlanCaptureExtension>()
+            .is_none()
+        {
+            config.with_option_extension(PlanCaptureExtension::new())
+        } else {
+            config
+        };
+        config.ballista_restricted_configuration()
     }
 
     fn ballista_config(&self) -> BallistaConfig {
@@ -523,6 +535,61 @@ impl BallistaQueryPlannerExtension {
     fn planner(&self) -> Arc<dyn QueryPlanner + Send + Sync + 'static> {
         self.planner.clone()
     }
+}
+
+/// Extension that allows capturing the optimized physical plan string.
+#[derive(Debug, Clone)]
+pub struct PlanCaptureExtension {
+    plan: Arc<Mutex<Option<String>>>,
+}
+
+impl PlanCaptureExtension {
+    /// Create a new, empty plan capture extension.
+    pub fn new() -> Self {
+        Self {
+            plan: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Returns an [`Arc`] pointing at the captured plan slot.
+    pub fn plan_arc(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.plan)
+    }
+
+    /// Store a new plan string, replacing any prior value.
+    pub fn set_plan(&self, plan: String) {
+        if let Ok(mut guard) = self.plan.lock() {
+            *guard = Some(plan);
+        }
+    }
+}
+
+impl datafusion::config::ExtensionOptions for PlanCaptureExtension {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn datafusion::config::ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, _key: &str, _value: &str) -> datafusion::error::Result<()> {
+        datafusion::error::Result::Err(datafusion::error::DataFusionError::Configuration(
+            "plan capture extension does not support configuration entries".to_string(),
+        ))
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        vec![]
+    }
+}
+
+impl ConfigExtension for PlanCaptureExtension {
+    const PREFIX: &'static str = "ballista.plan_capture";
 }
 
 #[cfg(test)]

@@ -906,6 +906,8 @@ pub struct SuccessfulJob {
     pub started_at: u64,
     #[prost(uint64, tag = "4")]
     pub ended_at: u64,
+    #[prost(string, optional, tag = "5")]
+    pub physical_plan: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct QueuedJob {

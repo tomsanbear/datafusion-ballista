@@ -36,6 +36,7 @@ use crate::config::SchedulerConfig;
 use crate::state::execution_graph::TaskDescription;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::EventSender;
+use ballista_core::extension::SessionConfigExt;
 use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::BallistaCodec;
 use datafusion::logical_expr::LogicalPlan;
@@ -422,6 +423,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             DisplayableExecutionPlan::new(plan.data.as_ref()).indent(false)
         );
 
+        let physical_plan = if session_ctx
+            .state()
+            .config()
+            .ballista_config()
+            .return_physical_plan()
+        {
+            Some(
+                DisplayableExecutionPlan::new(plan.data.as_ref())
+                    .indent(true)
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
         self.task_manager
             .submit_job(
                 job_id,
@@ -430,6 +446,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
                 plan.data,
                 queued_at,
                 session_config,
+                physical_plan,
             )
             .await?;
 
