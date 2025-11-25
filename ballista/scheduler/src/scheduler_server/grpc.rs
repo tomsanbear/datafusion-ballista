@@ -347,6 +347,18 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
 
             info!("execution query - session_id: {session_id}, operation_id: {operation_id}, job_name: {job_name}, job_id: {job_id}");
 
+            // DEBUG: Log settings received from client
+            let query_context_settings: Vec<_> = settings
+                .iter()
+                .filter(|kv| kv.key.starts_with("query_context"))
+                .map(|kv| format!("{}={:?}", kv.key, kv.value))
+                .collect();
+            eprintln!(
+                "[DEBUG execute_query] SCHEDULER received {} total settings. query_context settings: {:?}",
+                settings.len(),
+                query_context_settings
+            );
+
             let (session_id, session_ctx) = {
                 let session_config = self.state.session_manager.produce_config();
                 let session_config = session_config.update_from_key_value_pair(&settings);
