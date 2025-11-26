@@ -207,21 +207,9 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
         })?;
 
         let session_config = context.session_config();
-        let all_entries = session_config.options().entries();
-
-        // DEBUG: Log all entries being sent to scheduler, especially query_context
-        let query_context_entries: Vec<_> = all_entries
-            .iter()
-            .filter(|e| e.key.starts_with("query_context"))
-            .map(|e| format!("{}={:?}", e.key, e.value))
-            .collect();
-        eprintln!(
-            "[DEBUG DistributedQueryExec::execute] CLIENT sending {} total entries to scheduler. query_context entries: {:?}",
-            all_entries.len(),
-            query_context_entries
-        );
-
-        let mut settings: Vec<KeyValuePair> = all_entries
+        let mut settings: Vec<KeyValuePair> = session_config
+            .options()
+            .entries()
             .iter()
             .map(
                 |datafusion::config::ConfigEntry { key, value, .. }| KeyValuePair {

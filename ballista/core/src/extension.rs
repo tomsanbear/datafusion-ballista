@@ -429,43 +429,19 @@ impl SessionConfigHelperExt for SessionConfig {
     }
 
     fn update_from_key_value_pair_mut(&mut self, key_value_pairs: &[KeyValuePair]) {
-        // DEBUG: Log all incoming key-value pairs, especially query_context
-        let query_context_pairs: Vec<_> = key_value_pairs
-            .iter()
-            .filter(|kv| kv.key.starts_with("query_context"))
-            .map(|kv| format!("{}={:?}", kv.key, kv.value))
-            .collect();
-        eprintln!(
-            "[DEBUG update_from_key_value_pair_mut] EXECUTOR received {} total pairs. query_context pairs: {:?}",
-            key_value_pairs.len(),
-            query_context_pairs
-        );
-
         for KeyValuePair { key, value } in key_value_pairs {
             match value {
                 Some(value) => {
                     log::trace!(
                         "setting up configuration key: `{key}`, value: `{value:?}`"
                     );
-                    // DEBUG: Log query_context keys specifically
-                    if key.starts_with("query_context") {
-                        eprintln!(
-                            "[DEBUG update_from_key_value_pair_mut] EXECUTOR setting query_context key: `{key}` = `{value}`"
-                        );
-                    }
                     if let Err(e) = self.options_mut().set(key, value) {
                         // there is not much we can do about this error at the moment.
                         // it used to be warning but it gets very verbose
                         // as even datafusion properties can't be parsed
                         log::debug!(
                             "could not set configuration key: `{key}`, value: `{value:?}`, reason: {e}"
-                        );
-                        // DEBUG: Log failures for query_context keys
-                        if key.starts_with("query_context") {
-                            eprintln!(
-                                "[DEBUG update_from_key_value_pair_mut] EXECUTOR FAILED to set query_context key: `{key}` = `{value}`, error: {e}"
-                            );
-                        }
+                        )
                     }
                 }
                 None => {
