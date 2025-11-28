@@ -46,11 +46,31 @@ mod cpu_bound_executor;
 mod standalone;
 
 use ballista_core::error::BallistaError;
+use datafusion::execution::TaskContext;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 pub use standalone::new_standalone_executor;
 pub use standalone::new_standalone_executor_from_builder;
 pub use standalone::new_standalone_executor_from_state;
+
+/// Hook called after task execution to produce extension data.
+///
+/// This hook receives the [`TaskContext`] after task execution completes and returns
+/// optional serialized bytes. These bytes will be included in `TaskStatus.extension`
+/// and passed to the [`JobExtensionReducer`] on the scheduler for aggregation.
+///
+/// # Example
+///
+/// ```ignore
+/// let producer: TaskExtensionProducer = Arc::new(|task_ctx: &TaskContext| {
+///     // Collect custom metrics from RuntimeEnv or other sources
+///     let metrics = collect_custom_metrics(task_ctx);
+///     serde_json::to_vec(&metrics).ok()
+/// });
+/// ```
+pub type TaskExtensionProducer =
+    Arc<dyn Fn(&TaskContext) -> Option<Vec<u8>> + Send + Sync>;
 
 use log::info;
 
@@ -102,14 +122,16 @@ pub fn as_task_status(
     partition_id: PartitionId,
     operator_metrics: Option<Vec<OperatorMetricsSet>>,
     execution_times: TaskExecutionTimes,
+    extension: Vec<u8>,
 ) -> TaskStatus {
     let metrics = operator_metrics.unwrap_or_default();
     match execution_result {
         Ok(partitions) => {
             info!(
-                "Task {:?} finished with operator_metrics array size {}",
+                "Task {:?} finished with operator_metrics array size {}, extension size {}",
                 task_id,
-                metrics.len()
+                metrics.len(),
+                extension.len()
             );
             TaskStatus {
                 task_id: task_id as u32,
@@ -125,6 +147,7 @@ pub fn as_task_status(
                     executor_id,
                     partitions,
                 })),
+                extension,
             }
         }
         Err(e) => {
@@ -142,6 +165,7 @@ pub fn as_task_status(
                 end_exec_time: execution_times.end_exec_time,
                 metrics,
                 status: Some(task_status::Status::Failed(FailedTask::from(e))),
+                extension,
             }
         }
     }

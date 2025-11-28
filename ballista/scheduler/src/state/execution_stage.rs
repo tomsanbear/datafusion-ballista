@@ -41,6 +41,7 @@ use ballista_core::serde::protobuf::{RunningTask, task_status};
 use ballista_core::serde::scheduler::PartitionLocation;
 
 use crate::display::DisplayableBallistaExecutionPlan;
+use crate::TaskExtensionEntry;
 
 /// A stage in the ExecutionGraph representing a set of tasks that can be executed concurrently.
 ///
@@ -187,6 +188,8 @@ pub struct RunningStage {
     pub stage_metrics: Option<Vec<MetricsSet>>,
     /// [SessionConfig] used for this stage
     pub session_config: Arc<SessionConfig>,
+    /// Extension data collected from completed tasks
+    pub task_extensions: Vec<TaskExtensionEntry>,
 }
 
 /// If a stage finishes successfully, its task statuses and metrics will be finalized
@@ -213,6 +216,8 @@ pub struct SuccessfulStage {
     pub stage_metrics: Vec<MetricsSet>,
     /// [SessionConfig] used for this stage
     pub session_config: Arc<SessionConfig>,
+    /// Extension data collected from completed tasks
+    pub task_extensions: Vec<TaskExtensionEntry>,
 }
 
 /// If a stage fails, it will be with an error message
@@ -519,6 +524,7 @@ impl RunningStage {
             task_failure_numbers: vec![0; partitions],
             stage_metrics: None,
             session_config,
+            task_extensions: Vec::new(),
         }
     }
 
@@ -551,6 +557,7 @@ impl RunningStage {
             task_infos,
             stage_metrics,
             session_config: self.session_config.clone(),
+            task_extensions: self.task_extensions.clone(),
         }
     }
 
@@ -732,6 +739,25 @@ impl RunningStage {
         Ok(())
     }
 
+    /// Add extension data from a completed task
+    pub fn add_task_extension(
+        &mut self,
+        job_id: &str,
+        partition_id: usize,
+        executor_id: &str,
+        data: Vec<u8>,
+    ) {
+        if !data.is_empty() {
+            self.task_extensions.push(TaskExtensionEntry {
+                job_id: job_id.to_string(),
+                stage_id: self.stage_id,
+                partition_id,
+                executor_id: executor_id.to_string(),
+                data,
+            });
+        }
+    }
+
     /// Combines metrics from a completed task into the stage's aggregate metrics.
     pub fn combine_metrics_set(
         first: &mut MetricsSet,
@@ -872,6 +898,8 @@ impl SuccessfulStage {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
+            // Keep existing task extensions from previous successful tasks
+            task_extensions: self.task_extensions.clone(),
         }
     }
 

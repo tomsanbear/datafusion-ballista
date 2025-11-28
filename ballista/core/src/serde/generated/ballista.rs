@@ -175,6 +175,21 @@ pub struct SuccessfulStage {
     pub stage_metrics: ::prost::alloc::vec::Vec<OperatorMetricsSet>,
     #[prost(uint32, tag = "9")]
     pub stage_attempt_num: u32,
+    /// Extension data collected from completed tasks in this stage
+    #[prost(message, repeated, tag = "10")]
+    pub task_extensions: ::prost::alloc::vec::Vec<TaskExtensionEntry>,
+}
+/// Entry containing extension data from a single task execution
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskExtensionEntry {
+    #[prost(uint32, tag = "1")]
+    pub stage_id: u32,
+    #[prost(uint32, tag = "2")]
+    pub partition_id: u32,
+    #[prost(string, tag = "3")]
+    pub executor_id: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "4")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FailedStage {
@@ -665,6 +680,11 @@ pub struct TaskStatus {
     pub end_exec_time: u64,
     #[prost(message, repeated, tag = "12")]
     pub metrics: ::prost::alloc::vec::Vec<OperatorMetricsSet>,
+    /// Opaque extension data from executor hook (TaskExtensionProducer).
+    /// Allows executors to attach custom metadata that flows to the scheduler
+    /// and is aggregated into SuccessfulJob.extension via JobExtensionReducer.
+    #[prost(bytes = "vec", tag = "13")]
+    pub extension: ::prost::alloc::vec::Vec<u8>,
     #[prost(oneof = "task_status::Status", tags = "9, 10, 11")]
     pub status: ::core::option::Option<task_status::Status>,
 }
@@ -931,6 +951,10 @@ pub struct SuccessfulJob {
     pub ended_at: u64,
     #[prost(string, optional, tag = "5")]
     pub physical_plan: ::core::option::Option<::prost::alloc::string::String>,
+    /// Reduced extension data from JobExtensionReducer hook.
+    /// Contains aggregated custom metadata from all task extensions.
+    #[prost(bytes = "vec", tag = "6")]
+    pub extension: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QueuedJob {

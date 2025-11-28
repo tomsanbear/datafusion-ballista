@@ -22,6 +22,7 @@ use crate::execution_engine::ExecutionEngine;
 use crate::execution_engine::QueryStageExecutor;
 use crate::metrics::ExecutorMetricsCollector;
 use crate::metrics::LoggingMetricsCollector;
+use crate::TaskExtensionProducer;
 use ballista_core::ConfigProducer;
 use ballista_core::RuntimeProducer;
 use ballista_core::error::BallistaError;
@@ -92,6 +93,9 @@ pub struct Executor {
     /// Execution engine that the executor will delegate to
     /// for executing query stages
     pub(crate) execution_engine: Arc<dyn ExecutionEngine>,
+
+    /// Optional hook to produce extension data for each completed task
+    pub task_extension_producer: Option<TaskExtensionProducer>,
 }
 
 impl Executor {
@@ -113,6 +117,7 @@ impl Executor {
             Arc::new(LoggingMetricsCollector::default()),
             concurrent_tasks,
             None,
+            None,
         )
     }
 
@@ -128,6 +133,7 @@ impl Executor {
         metrics_collector: Arc<dyn ExecutorMetricsCollector>,
         concurrent_tasks: usize,
         execution_engine: Option<Arc<dyn ExecutionEngine>>,
+        task_extension_producer: Option<TaskExtensionProducer>,
     ) -> Self {
         Self {
             metadata,
@@ -140,6 +146,7 @@ impl Executor {
             abort_handles: Default::default(),
             execution_engine: execution_engine
                 .unwrap_or_else(|| Arc::new(DefaultExecutionEngine {})),
+            task_extension_producer,
         }
     }
 }

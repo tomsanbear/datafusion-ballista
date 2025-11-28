@@ -46,3 +46,48 @@ pub mod state;
 pub mod test_utils;
 
 pub use scheduler_server::SessionBuilder;
+
+use std::sync::Arc;
+
+/// Context for a single task's extension data, passed to the reducer.
+///
+/// Contains metadata about which task produced the extension data,
+/// allowing the reducer to make aggregation decisions based on
+/// stage, partition, or executor information.
+#[derive(Debug, Clone)]
+pub struct TaskExtensionEntry {
+    /// The job ID this task belongs to
+    pub job_id: String,
+    /// The stage ID within the job
+    pub stage_id: usize,
+    /// The partition ID within the stage
+    pub partition_id: usize,
+    /// The executor ID that ran this task
+    pub executor_id: String,
+    /// The serialized extension data from the task
+    pub data: Vec<u8>,
+}
+
+/// Hook called when a job completes successfully to reduce all task
+/// extension data into a single job-level extension.
+///
+/// This hook receives all [`TaskExtensionEntry`] instances collected during
+/// job execution and returns aggregated bytes for `SuccessfulJob.extension`.
+///
+/// # Example
+///
+/// ```ignore
+/// let reducer: JobExtensionReducer = Arc::new(|entries: Vec<TaskExtensionEntry>| {
+///     // Sum up metrics from all tasks
+///     let mut total = MyMetrics::default();
+///     for entry in entries {
+///         if let Ok(task_metrics) = serde_json::from_slice::<MyMetrics>(&entry.data) {
+///             total.bytes_read += task_metrics.bytes_read;
+///             total.rows_processed += task_metrics.rows_processed;
+///         }
+///     }
+///     serde_json::to_vec(&total).ok()
+/// });
+/// ```
+pub type JobExtensionReducer =
+    Arc<dyn Fn(Vec<TaskExtensionEntry>) -> Option<Vec<u8>> + Send + Sync>;

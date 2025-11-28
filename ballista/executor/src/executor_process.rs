@@ -65,6 +65,7 @@ use crate::flight_service::BallistaFlightService;
 use crate::metrics::LoggingMetricsCollector;
 use crate::shutdown::Shutdown;
 use crate::shutdown::ShutdownNotifier;
+use crate::TaskExtensionProducer;
 use crate::{ArrowFlightServerProvider, terminate};
 use crate::{execution_loop, executor_server};
 
@@ -129,6 +130,10 @@ pub struct ExecutorProcessConfig {
     pub override_physical_codec: Option<Arc<dyn PhysicalExtensionCodec>>,
     /// [ArrowFlightServerProvider] implementation override option
     pub override_arrow_flight_service: Option<Arc<ArrowFlightServerProvider>>,
+    /// Optional hook to produce extension data for each completed task.
+    /// The produced bytes are included in TaskStatus.extension and aggregated
+    /// by the scheduler's JobExtensionReducer into SuccessfulJob.extension.
+    pub task_extension_producer: Option<TaskExtensionProducer>,
 }
 
 impl ExecutorProcessConfig {
@@ -174,6 +179,7 @@ impl Default for ExecutorProcessConfig {
             override_logical_codec: None,
             override_physical_codec: None,
             override_arrow_flight_service: None,
+            task_extension_producer: None,
         }
     }
 }
@@ -279,6 +285,7 @@ pub async fn start_executor_process(
         metrics_collector,
         concurrent_tasks,
         opt.override_execution_engine.clone(),
+        opt.task_extension_producer.clone(),
     ));
 
     let connect_timeout = opt.scheduler_connect_timeout_seconds as u64;

@@ -391,7 +391,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task_id,
                 part.clone(),
                 query_stage_exec.clone(),
-                task_context,
+                task_context.clone(),
             )
             .await;
         info!("Done with task {task_identity}");
@@ -404,6 +404,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             .collect::<Result<Vec<_>, BallistaError>>()
             .ok();
         let executor_id = &self.executor.metadata.id;
+
+        // Call extension producer hook if configured
+        let extension = self
+            .executor
+            .task_extension_producer
+            .as_ref()
+            .and_then(|hook| hook(&task_context))
+            .unwrap_or_default();
 
         let end_exec_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -423,6 +431,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             part,
             operator_metrics,
             task_execution_times,
+            extension,
         );
 
         let scheduler_id = curator_task.scheduler_id;

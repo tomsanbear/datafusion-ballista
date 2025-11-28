@@ -521,6 +521,7 @@ mod test {
                         executor_id: "executor-1".to_owned(),
                         partitions,
                     })),
+                    extension: vec![],
                 };
 
                 scheduler
@@ -622,6 +623,7 @@ mod test {
                                 ),
                             ),
                         })),
+                        extension: vec![],
                     });
                 }
 

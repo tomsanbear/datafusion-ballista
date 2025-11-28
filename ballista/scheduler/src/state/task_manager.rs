@@ -22,6 +22,7 @@ use crate::state::execution_graph::{
     ExecutionGraph, ExecutionStage, RunningTaskInfo, TaskDescription,
 };
 use crate::state::executor_manager::ExecutorManager;
+use crate::JobExtensionReducer;
 
 use ballista_core::error::BallistaError;
 use ballista_core::error::Result;
@@ -134,6 +135,8 @@ pub struct TaskManager<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     active_job_cache: ActiveJobCache,
     /// Task launcher implementation.
     launcher: Arc<dyn TaskLauncher>,
+    /// Optional reducer for aggregating task extensions into job extension
+    job_extension_reducer: Option<JobExtensionReducer>,
 }
 
 /// Cache for active job information managed by this scheduler.
@@ -227,6 +230,24 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             scheduler_id: scheduler_id.clone(),
             active_job_cache: Arc::new(DashMap::new()),
             launcher: Arc::new(DefaultTaskLauncher::new(scheduler_id)),
+            job_extension_reducer: None,
+        }
+    }
+
+    /// Create a new TaskManager with a job extension reducer
+    pub fn with_extension_reducer(
+        state: Arc<dyn JobState>,
+        codec: BallistaCodec<T, U>,
+        scheduler_id: String,
+        job_extension_reducer: Option<JobExtensionReducer>,
+    ) -> Self {
+        Self {
+            state,
+            codec,
+            scheduler_id: scheduler_id.clone(),
+            active_job_cache: Arc::new(DashMap::new()),
+            launcher: Arc::new(DefaultTaskLauncher::new(scheduler_id)),
+            job_extension_reducer,
         }
     }
 
@@ -243,6 +264,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             scheduler_id,
             active_job_cache: Arc::new(DashMap::new()),
             launcher,
+            job_extension_reducer: None,
         }
     }
 
@@ -395,6 +417,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                     statuses,
                     TASK_MAX_FAILURES,
                     STAGE_MAX_FAILURES,
+                    self.job_extension_reducer.as_ref(),
                 )?
             } else {
                 // TODO Deal with curator changed case

@@ -49,6 +49,7 @@ pub(crate) use crate::state::execution_stage::{
     ExecutionStage, ResolvedStage, StageOutput, TaskInfo, UnresolvedStage,
 };
 use crate::state::task_manager::UpdatedStages;
+use crate::{JobExtensionReducer, TaskExtensionEntry};
 
 /// Represents the DAG for a distributed query plan.
 ///
@@ -300,6 +301,7 @@ impl ExecutionGraph {
         task_statuses: Vec<TaskStatus>,
         max_task_failures: usize,
         max_stage_failures: usize,
+        job_extension_reducer: Option<&JobExtensionReducer>,
     ) -> Result<Vec<QueryStageSchedulerEvent>> {
         let job_id = self.job_id().to_owned();
         // First of all, classify the statuses by stages
@@ -474,11 +476,21 @@ impl ExecutionGraph {
                             }
                         } else if let Some(task_status::Status::Successful(
                             successful_task,
-                        )) = task_status.status
+                        )) = task_status.status.clone()
                         {
-                            // update task metrics for successfu task
+                            // update task metrics for successful task
                             running_stage
                                 .update_task_metrics(partition_id, operator_metrics)?;
+
+                            // Collect task extension data if present
+                            if !task_status.extension.is_empty() {
+                                running_stage.add_task_extension(
+                                    &job_id,
+                                    partition_id,
+                                    &executor.id,
+                                    task_status.extension.clone(),
+                                );
+                            }
 
                             locations.append(&mut partition_to_location(
                                 &job_id,
@@ -686,13 +698,14 @@ impl ExecutionGraph {
                 .keys()
                 .cloned()
                 .collect(),
-        })
+        }, job_extension_reducer)
     }
 
     /// Processing stage status update after task status changing
     fn processing_stages_update(
         &mut self,
         updated_stages: UpdatedStages,
+        job_extension_reducer: Option<&JobExtensionReducer>,
     ) -> Result<Vec<QueryStageSchedulerEvent>> {
         let job_id = self.job_id().to_owned();
         let mut has_resolved = false;
@@ -745,7 +758,7 @@ impl ExecutionGraph {
         } else if self.is_successful() {
             // If this ExecutionGraph is successful, finish it
             info!("Job {job_id} is success, finalizing output partitions");
-            self.succeed_job()?;
+            self.succeed_job(job_extension_reducer)?;
             events.push(QueryStageSchedulerEvent::JobFinished {
                 job_id,
                 queued_at: self.queued_at,
@@ -1331,11 +1344,11 @@ impl ExecutionGraph {
         };
     }
 
-    /// Marks the job as successfully completed.
-    ///
-    /// This should only be called after all stages have completed successfully.
-    /// Returns an error if the job is not in a successful state.
-    pub fn succeed_job(&mut self) -> Result<()> {
+    /// Mark the job success, optionally reducing task extensions into job extension
+    pub fn succeed_job(
+        &mut self,
+        job_extension_reducer: Option<&JobExtensionReducer>,
+    ) -> Result<()> {
         if !self.is_successful() {
             return Err(BallistaError::Internal(format!(
                 "Attempt to finalize an incomplete job {}",
@@ -1354,16 +1367,41 @@ impl ExecutionGraph {
             .unwrap()
             .as_millis() as u64;
 
+        // Collect all task extensions from successful stages
+        let all_extensions: Vec<TaskExtensionEntry> = self
+            .stages
+            .values()
+            .filter_map(|stage| {
+                if let ExecutionStage::Successful(s) = stage {
+                    Some(s.task_extensions.clone())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+
+        // Reduce task extensions into job extension if reducer is provided
+        let extension = job_extension_reducer
+            .and_then(|reducer| {
+                if all_extensions.is_empty() {
+                    None
+                } else {
+                    reducer(all_extensions)
+                }
+            })
+            .unwrap_or_default();
+
         self.status = JobStatus {
             job_id: self.job_id.clone(),
             job_name: self.job_name.clone(),
             status: Some(job_status::Status::Successful(SuccessfulJob {
                 partition_location,
-
                 queued_at: self.queued_at,
                 started_at: self.start_time,
                 ended_at: self.end_time,
                 physical_plan: self.physical_plan.clone(),
+                extension,
             })),
         };
 
@@ -1731,7 +1769,7 @@ mod test {
         // Complete 1 task
         if let Some(task) = join_graph.pop_next_task(&executor1.id)? {
             let task_status = mock_completed_task(task, &executor1.id);
-            join_graph.update_task_status(&executor1, vec![task_status], 1, 1)?;
+            join_graph.update_task_status(&executor1, vec![task_status], 1, 1, None)?;
         }
         // Mock 1 running task
         let _task = join_graph.pop_next_task(&executor1.id)?;
@@ -1811,13 +1849,13 @@ mod test {
         // 1st task in the second stage
         if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
             let task_status = mock_completed_task(task, &executor2.id);
-            agg_graph.update_task_status(&executor2, vec![task_status], 1, 1)?;
+            agg_graph.update_task_status(&executor2, vec![task_status], 1, 1, None)?;
         }
 
         // 2rd task in the second stage
         if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
             let task_status = mock_completed_task(task, &executor1.id);
-            agg_graph.update_task_status(&executor1, vec![task_status], 1, 1)?;
+            agg_graph.update_task_status(&executor1, vec![task_status], 1, 1, None)?;
         }
 
         // 3rd task in the second stage, scheduled but not completed
@@ -1830,7 +1868,7 @@ mod test {
 
         // 3rd task status update comes later.
         let task_status = mock_completed_task(task.unwrap(), &executor1.id);
-        agg_graph.update_task_status(&executor1, vec![task_status], 1, 1)?;
+        agg_graph.update_task_status(&executor1, vec![task_status], 1, 1, None)?;
 
         // Two stages were reset, 1 Running stage rollback to Unresolved and 1 Completed stage move to Running
         assert_eq!(reset.0.len(), 2);
@@ -1878,6 +1916,7 @@ mod test {
             vec![task_status1, task_status2],
             4,
             4,
+            None,
         )?;
 
         assert_eq!(agg_graph.available_tasks(), 2);
@@ -1922,6 +1961,7 @@ mod test {
             vec![task_status1, task_status2],
             4,
             4,
+            None,
         )?;
 
         assert_eq!(agg_graph.available_tasks(), 1);
@@ -1947,7 +1987,7 @@ mod test {
                         )),
                     },
                 );
-                agg_graph.update_task_status(&executor, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor, vec![task_status], 4, 4, None)?;
             }
         }
 
@@ -1988,13 +2028,13 @@ mod test {
         // 1st task in the Stage 2
         if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
             let task_status = mock_completed_task(task, &executor2.id);
-            agg_graph.update_task_status(&executor2, vec![task_status], 1, 1)?;
+            agg_graph.update_task_status(&executor2, vec![task_status], 1, 1, None)?;
         }
 
         // 2rd task in the Stage 2
         if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
             let task_status = mock_completed_task(task, &executor1.id);
-            agg_graph.update_task_status(&executor1, vec![task_status], 1, 1)?;
+            agg_graph.update_task_status(&executor1, vec![task_status], 1, 1, None)?;
         }
 
         // 3rd task in the Stage 2, scheduled on executor 2 but not completed
@@ -2032,7 +2072,7 @@ mod test {
 
         // This long delayed failed task should not failure the stage/job and should not trigger any query stage events
         let query_stage_events =
-            agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+            agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
         assert!(query_stage_events.is_empty());
 
         drain_tasks(&mut agg_graph)?;
@@ -2085,6 +2125,7 @@ mod test {
             vec![task_status1, task_status2],
             4,
             4,
+            None,
         )?;
 
         assert_eq!(stage_events.len(), 1);
@@ -2121,14 +2162,14 @@ mod test {
         for _i in 0..5 {
             if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
                 let task_status = mock_completed_task(task, &executor2.id);
-                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 3);
         for _i in 0..3 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
 
@@ -2157,7 +2198,7 @@ mod test {
             }
         }
         assert_eq!(many_fetch_failure_status.len(), 6);
-        agg_graph.update_task_status(&executor3, many_fetch_failure_status, 4, 4)?;
+        agg_graph.update_task_status(&executor3, many_fetch_failure_status, 4, 4, None)?;
 
         // The Running stage should be Stage 2 now
         let running_stage = agg_graph.running_stages();
@@ -2202,7 +2243,7 @@ mod test {
                 );
 
                 let stage_events =
-                    agg_graph.update_task_status(&executor2, vec![task_status1], 4, 4)?;
+                    agg_graph.update_task_status(&executor2, vec![task_status1], 4, 4, None)?;
 
                 if attempt < 3 {
                     // No JobRunningFailed stage events
@@ -2254,7 +2295,7 @@ mod test {
         for _i in 0..5 {
             if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
                 let task_status = mock_completed_task(task, &executor2.id);
-                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 3);
@@ -2262,13 +2303,13 @@ mod test {
         for _i in 0..2 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
 
         if let Some(task) = agg_graph.pop_next_task(&executor3.id)? {
             let task_status = mock_completed_task(task, &executor3.id);
-            agg_graph.update_task_status(&executor3, vec![task_status], 4, 4)?;
+            agg_graph.update_task_status(&executor3, vec![task_status], 4, 4, None)?;
         }
         assert_eq!(agg_graph.available_tasks(), 0);
 
@@ -2300,7 +2341,7 @@ mod test {
                 )),
             },
         );
-        agg_graph.update_task_status(&executor3, vec![task_status_1], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_1], 4, 4, None)?;
 
         // The Running stage is Stage 2 now
         let running_stage = agg_graph.running_stages();
@@ -2325,7 +2366,7 @@ mod test {
             },
         );
         // This task update should be ignored
-        agg_graph.update_task_status(&executor3, vec![task_status_2], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_2], 4, 4, None)?;
         let running_stage = agg_graph.running_stages();
         assert_eq!(running_stage.len(), 1);
         assert_eq!(running_stage[0], 2);
@@ -2348,7 +2389,7 @@ mod test {
             },
         );
         // This task update should be handled because it has a different failure reason
-        agg_graph.update_task_status(&executor3, vec![task_status_3], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_3], 4, 4, None)?;
         // Running stage is still Stage 2, but available tasks changed to 7
         assert_eq!(running_stage.len(), 1);
         assert_eq!(running_stage[0], 2);
@@ -2358,7 +2399,7 @@ mod test {
         for _i in 0..4 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(running_stage.len(), 1);
@@ -2382,7 +2423,7 @@ mod test {
             },
         );
         // This task update should be ignored because the same failure reason is already handled
-        agg_graph.update_task_status(&executor3, vec![task_status_4], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_4], 4, 4, None)?;
         let running_stage = agg_graph.running_stages();
         assert_eq!(running_stage.len(), 1);
         assert_eq!(running_stage[0], 2);
@@ -2392,7 +2433,7 @@ mod test {
         for _i in 0..3 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 0);
@@ -2415,7 +2456,7 @@ mod test {
                 )),
             },
         );
-        agg_graph.update_task_status(&executor3, vec![task_status_5], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_5], 4, 4, None)?;
         // Stage 3's new attempt is running
         let running_stage = agg_graph.running_stages();
         assert_eq!(running_stage.len(), 1);
@@ -2455,7 +2496,7 @@ mod test {
         for _i in 0..5 {
             if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
                 let task_status = mock_completed_task(task, &executor2.id);
-                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 3);
@@ -2463,7 +2504,7 @@ mod test {
         for _i in 0..3 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 0);
@@ -2490,7 +2531,7 @@ mod test {
                 )),
             },
         );
-        agg_graph.update_task_status(&executor3, vec![task_status_1], 4, 4)?;
+        agg_graph.update_task_status(&executor3, vec![task_status_1], 4, 4, None)?;
 
         // The Running stage is Stage 2 now
         let running_stage = agg_graph.running_stages();
@@ -2526,7 +2567,7 @@ mod test {
 
         // TaskStatus of Stage 2 come together with Stage 3 delayed FetchFailure update.
         // The successful tasks from Stage 2 would try to succeed the Stage2 and the delayed fetch failure try to reset the TaskInfo
-        agg_graph.update_task_status(&executor3, task_status_vec, 4, 4)?;
+        agg_graph.update_task_status(&executor3, task_status_vec, 4, 4, None)?;
         //The Running stage is still Stage 2, 3 new pending tasks added due to FetchPartitionError(executor1)
         assert_eq!(running_stage.len(), 1);
         assert_eq!(running_stage[0], 2);
@@ -2555,14 +2596,14 @@ mod test {
         for _i in 0..5 {
             if let Some(task) = agg_graph.pop_next_task(&executor2.id)? {
                 let task_status = mock_completed_task(task, &executor2.id);
-                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor2, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 3);
         for _i in 0..3 {
             if let Some(task) = agg_graph.pop_next_task(&executor1.id)? {
                 let task_status = mock_completed_task(task, &executor1.id);
-                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4)?;
+                agg_graph.update_task_status(&executor1, vec![task_status], 4, 4, None)?;
             }
         }
         assert_eq!(agg_graph.available_tasks(), 0);
@@ -2587,7 +2628,7 @@ mod test {
             );
 
             let _stage_events =
-                agg_graph.update_task_status(&executor3, vec![task_status1], 4, 4)?;
+                agg_graph.update_task_status(&executor3, vec![task_status1], 4, 4, None)?;
         }
         // The Running stage is Stage 2 now
         let running_stage = agg_graph.running_stages();
@@ -2613,7 +2654,7 @@ mod test {
                 },
             );
             let _stage_events =
-                agg_graph.update_task_status(&executor3, vec![task_status1], 4, 4)?;
+                agg_graph.update_task_status(&executor3, vec![task_status1], 4, 4, None)?;
         }
         // The Running stage is Stage 1 now
         let running_stage = agg_graph.running_stages();
@@ -2688,6 +2729,7 @@ mod test {
             vec![task_status1, task_status2, task_status3],
             4,
             4,
+            None,
         )?;
 
         assert_eq!(stage_events.len(), 1);
@@ -2715,7 +2757,7 @@ mod test {
         let executor = mock_executor("executor-id1".to_string());
         while let Some(task) = graph.pop_next_task(&executor.id)? {
             let task_status = mock_completed_task(task, &executor.id);
-            graph.update_task_status(&executor, vec![task_status], 1, 1)?;
+            graph.update_task_status(&executor, vec![task_status], 1, 1, None)?;
         }
 
         Ok(())
