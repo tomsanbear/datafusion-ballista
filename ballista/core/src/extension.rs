@@ -592,6 +592,88 @@ impl ConfigExtension for PlanCaptureExtension {
     const PREFIX: &'static str = "ballista.plan_capture";
 }
 
+/// Extension that allows capturing the job extension bytes from a successful query.
+///
+/// This is used to retrieve custom metadata (e.g., usage metrics) that was aggregated
+/// by the scheduler's `JobExtensionReducer` hook from all task extensions.
+#[derive(Debug, Clone)]
+pub struct JobExtensionCaptureExtension {
+    extension: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl JobExtensionCaptureExtension {
+    /// Create a new, empty job extension capture.
+    pub fn new() -> Self {
+        Self {
+            extension: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Returns an [`Arc`] pointing at the captured extension slot.
+    pub fn extension_arc(&self) -> Arc<Mutex<Option<Vec<u8>>>> {
+        Arc::clone(&self.extension)
+    }
+
+    /// Store extension bytes, replacing any prior value.
+    pub fn set_extension(&self, data: Vec<u8>) {
+        if let Ok(mut guard) = self.extension.lock() {
+            *guard = Some(data);
+        }
+    }
+
+    /// Take the captured extension bytes, leaving None in place.
+    pub fn take_extension(&self) -> Option<Vec<u8>> {
+        if let Ok(mut guard) = self.extension.lock() {
+            guard.take()
+        } else {
+            None
+        }
+    }
+
+    /// Get a clone of the captured extension bytes without consuming.
+    pub fn get_extension(&self) -> Option<Vec<u8>> {
+        if let Ok(guard) = self.extension.lock() {
+            guard.clone()
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for JobExtensionCaptureExtension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl datafusion::config::ExtensionOptions for JobExtensionCaptureExtension {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn datafusion::config::ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, _key: &str, _value: &str) -> datafusion::error::Result<()> {
+        datafusion::error::Result::Err(datafusion::error::DataFusionError::Configuration(
+            "job extension capture does not support configuration entries".to_string(),
+        ))
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        vec![]
+    }
+}
+
+impl ConfigExtension for JobExtensionCaptureExtension {
+    const PREFIX: &'static str = "ballista.job_extension_capture";
+}
+
 #[cfg(test)]
 mod test {
     use datafusion::{

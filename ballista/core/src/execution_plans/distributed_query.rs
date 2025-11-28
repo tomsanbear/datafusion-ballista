@@ -17,7 +17,7 @@
 
 use crate::client::BallistaClient;
 use crate::config::{BallistaConfig, BALLISTA_RETURN_PHYSICAL_PLAN};
-use crate::extension::{PlanCaptureExtension, SessionConfigExt};
+use crate::extension::{JobExtensionCaptureExtension, PlanCaptureExtension, SessionConfigExt};
 use crate::serde::protobuf::SuccessfulJob;
 use crate::serde::protobuf::{
     execute_query_params::Query, execute_query_result, job_status,
@@ -231,6 +231,11 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             .extensions
             .get::<PlanCaptureExtension>()
             .map(|ext| ext.plan_arc());
+        let extension_slot = session_config
+            .options()
+            .extensions
+            .get::<JobExtensionCaptureExtension>()
+            .map(|ext| ext.extension_arc());
         let operation_id = uuid::Uuid::now_v7().to_string();
         debug!(
             "Distributed query with session_id: {}, execution operation_id: {}",
@@ -253,6 +258,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 query,
                 self.config.default_grpc_client_max_message_size(),
                 plan_slot,
+                extension_slot,
             )
             .map_err(|e| ArrowError::ExternalError(Box::new(e))),
         )
@@ -290,6 +296,7 @@ async fn execute_query(
     query: ExecuteQueryParams,
     max_message_size: usize,
     plan_slot: Option<Arc<Mutex<Option<String>>>>,
+    extension_slot: Option<Arc<Mutex<Option<Vec<u8>>>>>,
 ) -> Result<impl Stream<Item = Result<RecordBatch>> + Send> {
     info!("Connecting to Ballista scheduler at {scheduler_url}");
     // TODO reuse the scheduler to avoid connecting to the Ballista scheduler again and again
@@ -367,6 +374,7 @@ async fn execute_query(
                 ended_at,
                 partition_location,
                 physical_plan,
+                extension,
                 ..
             })) => {
                 let duration = ended_at.saturating_sub(started_at);
@@ -376,6 +384,18 @@ async fn execute_query(
                 if let (Some(slot), Some(plan)) = (plan_slot.as_ref(), physical_plan) {
                     if let Ok(mut guard) = slot.lock() {
                         *guard = Some(plan);
+                    }
+                }
+                // Capture job extension bytes (e.g., aggregated usage metrics)
+                if let Some(slot) = extension_slot.as_ref() {
+                    if !extension.is_empty() {
+                        if let Ok(mut guard) = slot.lock() {
+                            debug!(
+                                "Job {job_id} captured extension data: {} bytes",
+                                extension.len()
+                            );
+                            *guard = Some(extension);
+                        }
                     }
                 }
                 let streams = partition_location.into_iter().map(move |partition| {
