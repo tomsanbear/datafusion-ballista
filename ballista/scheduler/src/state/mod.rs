@@ -105,16 +105,28 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         scheduler_name: String,
         config: Arc<SchedulerConfig>,
     ) -> Self {
+        // Create task manager, optionally with extension reducer
+        let task_manager = if config.job_extension_reducer.is_some() {
+            TaskManager::with_extension_reducer(
+                cluster.job_state(),
+                codec.clone(),
+                scheduler_name,
+                config.job_extension_reducer.clone(),
+            )
+        } else {
+            TaskManager::new(
+                cluster.job_state(),
+                codec.clone(),
+                scheduler_name,
+            )
+        };
+
         Self {
             executor_manager: ExecutorManager::new(
                 cluster.cluster_state(),
                 config.clone(),
             ),
-            task_manager: TaskManager::new(
-                cluster.job_state(),
-                codec.clone(),
-                scheduler_name,
-            ),
+            task_manager,
             session_manager: SessionManager::new(cluster.job_state()),
             codec,
             config,
