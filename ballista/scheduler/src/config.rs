@@ -238,6 +238,8 @@ pub struct SchedulerConfig {
     pub override_logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
     /// [PhysicalExtensionCodec] override option
     pub override_physical_codec: Option<Arc<dyn PhysicalExtensionCodec>>,
+    /// [JobExtensionReducer] override option for aggregating task extension data
+    pub job_extension_reducer: Option<crate::JobExtensionReducer>,
 }
 
 impl Default for SchedulerConfig {
@@ -264,6 +266,7 @@ impl Default for SchedulerConfig {
             override_session_builder: None,
             override_logical_codec: None,
             override_physical_codec: None,
+            job_extension_reducer: None,
         }
     }
 }
@@ -493,6 +496,7 @@ impl TryFrom<Config> for SchedulerConfig {
             override_logical_codec: None,
             override_physical_codec: None,
             override_session_builder: None,
+            job_extension_reducer: None,
         };
 
         Ok(config)
