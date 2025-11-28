@@ -116,6 +116,7 @@ pub async fn new_standalone_executor_from_builder(
         Arc::new(LoggingMetricsCollector::default()),
         concurrent_tasks,
         None,
+        None,
     ));
 
     let service = BallistaFlightService::new();

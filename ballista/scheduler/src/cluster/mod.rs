@@ -973,7 +973,7 @@ mod test {
         for _ in 0..num_target_partitions - num_pending_task {
             if let Some(task) = graph.pop_next_task(&executor.id)? {
                 let task_status = mock_completed_task(task, &executor.id);
-                graph.update_task_status(&executor, vec![task_status], 1, 1)?;
+                graph.update_task_status(&executor, vec![task_status], 1, 1, None)?;
             }
         }
 

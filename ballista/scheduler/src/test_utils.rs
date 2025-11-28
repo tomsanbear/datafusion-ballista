@@ -308,6 +308,7 @@ pub fn default_task_runner() -> impl TaskRunner {
                     executor_id: executor_id.clone(),
                     partitions: partitions.clone(),
                 })),
+                extension: vec![],
             });
         }
 
@@ -809,7 +810,7 @@ pub fn revive_graph_and_complete_next_stage_with_executor(
         for _ in 0..num_available_tasks {
             if let Some(task) = graph.pop_next_task(&executor.id).unwrap() {
                 let task_status = mock_completed_task(task, &executor.id);
-                graph.update_task_status(executor, vec![task_status], 1, 1)?;
+                graph.update_task_status(executor, vec![task_status], 1, 1, None)?;
             }
         }
     }
@@ -1147,6 +1148,7 @@ pub fn mock_completed_task(task: TaskDescription, executor_id: &str) -> TaskStat
             executor_id: executor_id.to_owned(),
             partitions,
         })),
+        extension: vec![],
     }
 }
 
@@ -1182,5 +1184,6 @@ pub fn mock_failed_task(task: TaskDescription, failed_task: FailedTask) -> TaskS
         end_exec_time: 0,
         metrics: vec![],
         status: Some(task_status::Status::Failed(failed_task)),
+        extension: vec![],
     }
 }

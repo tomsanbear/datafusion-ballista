@@ -163,6 +163,7 @@ pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             };
 
                             // TODO: MM should we re-try message?
+                            // No TaskContext available for early failures, so no extension
                             if let Err(error) = task_status_sender.send(as_task_status(
                                 Err(e),
                                 executor.metadata.id.clone(),
@@ -171,6 +172,7 @@ pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                                 partition_id,
                                 None,
                                 task_execution_times,
+                                Vec::new(),
                             )) {
                                 warn!("failed to send task status: {error:?}");
                             };
@@ -292,7 +294,7 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
             task_id as usize,
             part.clone(),
             query_stage_exec.clone(),
-            task_context,
+            task_context.clone(),
         ))
         .catch_unwind()
         .await
@@ -315,6 +317,13 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
             .collect::<Result<Vec<_>, BallistaError>>()
             .ok();
 
+        // Call extension producer hook if configured
+        let extension = executor
+            .task_extension_producer
+            .as_ref()
+            .and_then(|hook| hook(&task_context))
+            .unwrap_or_default();
+
         let end_exec_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -334,6 +343,7 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
             part,
             operator_metrics,
             task_execution_times,
+            extension,
         ));
 
         // Release the permit after the work is done

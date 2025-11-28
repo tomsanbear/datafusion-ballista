@@ -147,6 +147,7 @@ impl TryFrom<Config> for ExecutorProcessConfig {
             override_logical_codec: None,
             override_physical_codec: None,
             override_arrow_flight_service: None,
+            task_extension_producer: None,
         })
     }
 }
