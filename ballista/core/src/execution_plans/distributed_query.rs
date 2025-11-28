@@ -17,7 +17,7 @@
 
 use crate::client::BallistaClient;
 use crate::config::{BallistaConfig, BALLISTA_RETURN_PHYSICAL_PLAN};
-use crate::extension::{PlanCaptureExtension, SessionConfigExt};
+use crate::extension::{JobExtensionCaptureExtension, PlanCaptureExtension, SessionConfigExt};
 use crate::serde::protobuf::SuccessfulJob;
 use crate::serde::protobuf::{
     ExecuteQueryParams, GetJobStatusParams, GetJobStatusResult, KeyValuePair,
@@ -239,6 +239,11 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             .extensions
             .get::<PlanCaptureExtension>()
             .map(|ext| ext.plan_arc());
+        let extension_slot = session_config
+            .options()
+            .extensions
+            .get::<JobExtensionCaptureExtension>()
+            .map(|ext| ext.extension_arc());
         let operation_id = uuid::Uuid::now_v7().to_string();
         debug!(
             "Distributed query with session_id: {}, execution operation_id: {}",
@@ -265,6 +270,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 Arc::new(self.metrics.clone()),
                 partition,
                 plan_slot,
+                extension_slot,
             )
             .map_err(|e| ArrowError::ExternalError(Box::new(e))),
         )
@@ -305,6 +311,7 @@ async fn execute_query(
     metrics: Arc<ExecutionPlanMetricsSet>,
     partition: usize,
     plan_slot: Option<Arc<Mutex<Option<String>>>>,
+    extension_slot: Option<Arc<Mutex<Option<Vec<u8>>>>>,
 ) -> Result<impl Stream<Item = Result<RecordBatch>> + Send> {
     // Capture query submission time for total_query_time_ms
     let query_start_time = std::time::Instant::now();
@@ -386,6 +393,7 @@ async fn execute_query(
                 ended_at,
                 partition_location,
                 physical_plan,
+                extension,
                 ..
             })) => {
                 // Calculate job execution time (server-side execution)
@@ -423,6 +431,18 @@ async fn execute_query(
                 if let (Some(slot), Some(plan)) = (plan_slot.as_ref(), physical_plan) {
                     if let Ok(mut guard) = slot.lock() {
                         *guard = Some(plan);
+                    }
+                }
+                // Capture job extension bytes (e.g., aggregated usage metrics)
+                if let Some(slot) = extension_slot.as_ref() {
+                    if !extension.is_empty() {
+                        if let Ok(mut guard) = slot.lock() {
+                            debug!(
+                                "Job {job_id} captured extension data: {} bytes",
+                                extension.len()
+                            );
+                            *guard = Some(extension);
+                        }
                     }
                 }
 
